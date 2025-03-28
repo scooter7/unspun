@@ -6,6 +6,7 @@ from textblob import TextBlob
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import DBSCAN
+import plotly.graph_objects as go
 
 # ----------------------------------------------------------------------
 # 1. Configuration and Helper Functions
@@ -18,13 +19,13 @@ openai.api_key = st.secrets["OPENAI"]["API_KEY"]
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
-    For CNN and Fox News, uses their RSS feeds with lxml-xml parser.
+    For CNN and Fox News, uses their RSS feeds with the lxml-xml parser.
     For MSNBC and Breitbart, attempts to scrape from the provided URL.
     """
     headlines = []
     try:
         if source == "CNN":
-            # Use CNN's RSS feed with the lxml-xml parser
+            # Use CNN's RSS feed
             rss_url = "http://rss.cnn.com/rss/edition.rss"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
@@ -33,7 +34,7 @@ def get_headlines(url: str, source: str) -> list:
             headlines = [item.title.get_text(strip=True) for item in items if item.title]
         
         elif source == "Fox News":
-            # Use Fox News's RSS feed with the lxml-xml parser
+            # Use Fox News's RSS feed
             rss_url = "https://feeds.foxnews.com/foxnews/latest"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
@@ -191,6 +192,33 @@ def main():
         st.write(f"Impact Score: {gauge_value}/100")
         st.write("---")
 
+    # Create Sentiment Gauges (with needle and colored ranges)
+    st.header("Sentiment Gauges")
+    for idx, row in df.iterrows():
+        sentiment = row["Sentiment"]
+        # Transform sentiment from [-1, 1] to [0, 100]
+        transformed_sentiment = (sentiment + 1) * 50
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=transformed_sentiment,
+            title={"text": f"Sentiment ({row['Source']})"},
+            gauge={
+                "axis": {"range": [0, 100]},
+                "bar": {"color": "black"},
+                "steps": [
+                    {"range": [0, 33], "color": "red"},
+                    {"range": [33, 66], "color": "yellow"},
+                    {"range": [66, 100], "color": "green"}
+                ],
+                "threshold": {
+                    "line": {"color": "black", "width": 4},
+                    "thickness": 0.75,
+                    "value": transformed_sentiment
+                }
+            }
+        ))
+        st.plotly_chart(fig)
+    
     # Cluster headlines for overlapping stories.
     st.header("Overlapping Stories & Unbiased Summaries")
     combined_headlines = []
