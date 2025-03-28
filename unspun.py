@@ -17,64 +17,50 @@ openai.api_key = st.secrets["OPENAI"]["API_KEY"]
 @st.cache_data(show_spinner=False)
 def get_headlines(url: str, source: str) -> list:
     """
-    Scrapes up to 10 headlines from a given URL using source-specific selectors.
+    Fetches up to 10 headlines for a given source.
+    For CNN and Fox News, uses their RSS feeds.
+    For MSNBC and Breitbart, attempts to scrape from the provided URL.
     """
     headlines = []
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
         if source == "CNN":
-            # CNN: First try to select headlines using the span with 'cd__headline-text'
-            elements = soup.select("span.cd__headline-text")
-            # If not found, fallback to h3 elements with class 'cd__headline'
-            if not elements:
-                elements = soup.select("h3.cd__headline")
-            headlines = [el.get_text(strip=True) for el in elements][:10]
+            # Use CNN's RSS feed
+            rss_url = "http://rss.cnn.com/rss/edition.rss"
+            response = requests.get(rss_url, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, "xml")
+            items = soup.find_all("item")[:10]
+            headlines = [item.title.get_text(strip=True) for item in items if item.title]
         
         elif source == "Fox News":
-            # Fox News: Use anchor tags with '/story/' in their href
-            anchors = soup.find_all("a", href=True)
-            filtered_headlines = []
-            # Expanded list of unwanted text values
-            unwanted = {
-                "games hub", "america together", "entertainment", "personal finance", 
-                "faith & values", "travel + outdoors", "food + drink", "fox weather",
-                "full episodes", "latest wires", "antisemitism exposed", "fox around the world",
-                "rss", "world", "opinion", "outkick", "digital originals", "economy",
-                "fox news flash", "elections", "personal freedoms"
-            }
-            for a in anchors:
-                href = a.get("href")
-                if "/story/" in href:
-                    text = a.get_text(strip=True)
-                    # Skip if text is too short (likely not a news headline)
-                    if len(text) < 15:
-                        continue
-                    # Skip if the text matches any unwanted phrase (case-insensitive)
-                    if text.lower() in unwanted:
-                        continue
-                    if text not in filtered_headlines:
-                        filtered_headlines.append(text)
-                if len(filtered_headlines) >= 10:
-                    break
-            headlines = filtered_headlines[:10]
+            # Use Fox News's RSS feed
+            rss_url = "https://feeds.foxnews.com/foxnews/latest"
+            response = requests.get(rss_url, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, "xml")
+            items = soup.find_all("item")[:10]
+            headlines = [item.title.get_text(strip=True) for item in items if item.title]
         
         elif source == "MSNBC":
-            # MSNBC: try h2 tags as a starting point.
+            # MSNBC: try scraping from the provided URL using h2 tags
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
             elements = soup.find_all("h2")
             headlines = [el.get_text(strip=True) for el in elements][:10]
         
         elif source == "Breitbart":
-            # Breitbart: sometimes headlines are in h1; fallback to h2 if needed.
+            # Breitbart: attempt h1 tags, fallback to h2 tags
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
             elements = soup.find_all("h1")
             if len(elements) < 10:
                 elements = soup.find_all("h2")
             headlines = [el.get_text(strip=True) for el in elements][:10]
             
     except Exception as e:
-        st.error(f"Error fetching headlines from {source} ({url}): {e}")
+        st.error(f"Error fetching headlines from {source}: {e}")
     return headlines
 
 def perform_sentiment_analysis(text: str) -> float:
@@ -147,11 +133,10 @@ def cluster_headlines(headlines: list) -> list:
         return []
     vectorizer = TfidfVectorizer(stop_words="english")
     X = vectorizer.fit_transform(headlines)
-    # DBSCAN with cosine distance metric (eps chosen heuristically)
     clustering = DBSCAN(eps=0.5, min_samples=2, metric="cosine").fit(X)
     clusters = {}
     for idx, label in enumerate(clustering.labels_):
-        if label == -1:  # noise; ignore individual, non-overlapping headlines
+        if label == -1:
             continue
         clusters.setdefault(label, []).append(headlines[idx])
     return list(clusters.values())
@@ -162,12 +147,13 @@ def cluster_headlines(headlines: list) -> list:
 def main():
     st.title("Unbiased News Aggregator")
     st.write(
-        "This app scrapes the latest headlines from CNN, Fox News, MSNBC, and Breitbart. "
+        "This app fetches the latest headlines from CNN, Fox News, MSNBC, and Breitbart. "
         "It performs sentiment analysis, gauges the impact of each story, clusters overlapping "
         "stories, and generates an unbiased summary using the gpt-4o-mini model."
     )
 
     # Define the news sources and their URLs.
+    # For CNN and Fox News, the URLs here won't be used because we rely on RSS feeds.
     news_sources = {
         "CNN": "https://www.cnn.com",
         "Fox News": "https://www.foxnews.com",
@@ -175,10 +161,10 @@ def main():
         "Breitbart": "https://www.breitbart.com"
     }
 
-    st.header("Scraping Headlines")
+    st.header("Fetching Headlines")
     all_headlines = {}
     for source, url in news_sources.items():
-        with st.spinner(f"Scraping headlines from {source}..."):
+        with st.spinner(f"Fetching headlines from {source}..."):
             headlines = get_headlines(url, source)
             if not headlines:
                 st.warning(f"No headlines fetched for {source}.")
@@ -202,17 +188,14 @@ def main():
     st.dataframe(df)
 
     st.subheader("Impact Gauges")
-    st.write(
-        "Below are individual gauges (0-100) representing the estimated impact score for each headline."
-    )
     for idx, row in df.iterrows():
         st.write(f"**{row['Headline']}** (Source: {row['Source']})")
-        gauge_value = int(row["Impact"])  # Impact score is in 0-100 range based on keywords.
+        gauge_value = int(row["Impact"])
         st.progress(gauge_value)
         st.write(f"Impact Score: {gauge_value}/100")
         st.write("---")
 
-    # Combine all headlines and perform clustering for overlapping stories.
+    # Cluster headlines for overlapping stories.
     st.header("Overlapping Stories & Unbiased Summaries")
     combined_headlines = []
     for headlines in all_headlines.values():
