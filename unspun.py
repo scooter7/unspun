@@ -148,7 +148,7 @@ def measure_impact(text: str, link: str = None) -> int:
             n=1
         )
         # Use dot notation to extract the content.
-        result = response.choices[0].message["content"].strip()
+        result = response.choices[0].message.content.strip()
         # Extract the first integer found in the response.
         numbers = re.findall(r'\d+', result)
         if numbers:
@@ -180,7 +180,7 @@ def get_unbiased_summary(cluster_headlines: list) -> str:
             temperature=0.7,
             n=1
         )
-        summary = response.choices[0].message["content"].strip()
+        summary = response.choices[0].message.content.strip()
     except Exception as e:
         summary = "Error generating summary: " + str(e)
     return summary
