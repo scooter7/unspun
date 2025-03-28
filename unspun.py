@@ -18,57 +18,73 @@ import re
 # Set up OpenAI API key from Streamlit secrets.
 openai.api_key = st.secrets["OPENAI"]["API_KEY"]
 
-def filter_recent_items(items, max_age_hours=24):
-    """Filter RSS items to include only those published within max_age_hours."""
-    now = datetime.datetime.now(datetime.timezone.utc)
-    threshold = datetime.timedelta(hours=max_age_hours)
-    recent_items = []
-    for item in items:
-        if item.pubDate:
-            try:
-                pub_date = email.utils.parsedate_to_datetime(item.pubDate.get_text())
-                if (now - pub_date) <= threshold:
-                    recent_items.append(item)
-            except Exception:
-                recent_items.append(item)  # If date parsing fails, include the item.
-        else:
-            recent_items.append(item)
-    return recent_items
-
-def is_recent_element(element, max_age_hours=24):
-    """
-    For MSNBC/Breitbart elements, check for a <time> tag with a datetime attribute.
-    If found, parse it and return True only if it is within max_age_hours.
-    If no time tag is found, assume the element is recent.
-    """
-    time_tag = element.find("time")
-    if time_tag and time_tag.has_attr("datetime"):
-        try:
-            pub_date = email.utils.parsedate_to_datetime(time_tag["datetime"])
-            now = datetime.datetime.now(datetime.timezone.utc)
-            return (now - pub_date) <= datetime.timedelta(hours=max_age_hours)
-        except Exception:
-            return True
-    return True
+def is_recent_date(pub_date: datetime.datetime, max_age_hours=24) -> bool:
+    now = datetime.datetime.now(pub_date.tzinfo) if pub_date.tzinfo else datetime.datetime.now()
+    return (now - pub_date).total_seconds() <= max_age_hours * 3600
 
 @st.cache_data(show_spinner=False)
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
-    For CNN and Fox News, uses their RSS feeds (returning a dict with title and link)
-    and filters for stories published within the last 24 hours.
-    For MSNBC and Breitbart, attempts to scrape from the provided URL (link is set to None)
-    and, if available, uses nearby <time> tags to filter headlines by recency.
+    For CNN, scrapes the homepage directly and uses the article URL to parse the publication date.
+    For Fox News (via RSS), MSNBC, and Breitbart, uses existing logic.
     """
     headlines = []
     try:
-        if source in ["CNN", "Fox News"]:
-            rss_url = "http://rss.cnn.com/rss/edition.rss" if source == "CNN" else "https://feeds.foxnews.com/foxnews/latest"
+        if source == "CNN":
+            # Directly scrape CNN homepage
+            cnn_url = "https://www.cnn.com"
+            response = requests.get(cnn_url, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            # CNN headlines are often in h3 elements with class 'cd__headline'
+            elements = soup.select("h3.cd__headline a")
+            # Use a regex to capture publication date from the URL (e.g., /2023/04/01/)
+            date_pattern = re.compile(r'/(\d{4})/(\d{2})/(\d{2})/')
+            now = datetime.datetime.now()
+            cnn_headlines = []
+            for el in elements:
+                headline_text = el.get_text(strip=True)
+                link = el.get("href")
+                if not link:
+                    continue
+                # Convert relative URL to absolute if needed.
+                if not link.startswith("http"):
+                    link = "https://www.cnn.com" + link
+                match = date_pattern.search(link)
+                if match:
+                    year, month, day = match.groups()
+                    try:
+                        # CNN URLs don't provide time; assume publication is at midnight local time.
+                        pub_date = datetime.datetime(int(year), int(month), int(day))
+                        if is_recent_date(pub_date, max_age_hours=24):
+                            cnn_headlines.append({"title": headline_text, "link": link})
+                    except Exception:
+                        continue
+                # If no date is found, we skip the headline.
+                if len(cnn_headlines) >= 10:
+                    break
+            headlines = cnn_headlines[:10]
+        elif source == "Fox News":
+            # Use Fox News's RSS feed
+            rss_url = "https://feeds.foxnews.com/foxnews/latest"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "lxml-xml")
             items = soup.find_all("item")
-            recent_items = filter_recent_items(items, max_age_hours=24)
+            # Filter by publication date using the pubDate field.
+            recent_items = []
+            now = datetime.datetime.now(datetime.timezone.utc)
+            for item in items:
+                if item.pubDate:
+                    try:
+                        pub_date = email.utils.parsedate_to_datetime(item.pubDate.get_text())
+                        if (now - pub_date).total_seconds() <= 24*3600:
+                            recent_items.append(item)
+                    except Exception:
+                        recent_items.append(item)
+                else:
+                    recent_items.append(item)
             items = recent_items[:10]
             headlines = [{"title": item.title.get_text(strip=True), "link": item.link.get_text(strip=True)}
                          for item in items if item.title and item.link]
@@ -82,8 +98,7 @@ def get_headlines(url: str, source: str) -> list:
                     elements = soup.find_all("h2")
             else:
                 elements = soup.find_all("h2")
-            # Filter elements by recency if a <time> tag is present.
-            elements = [el for el in elements if is_recent_element(el, max_age_hours=24)]
+            # For these sources, we assume the headlines on the main page are recent.
             headlines = [{"title": el.get_text(strip=True), "link": None} for el in elements][:10]
     except Exception as e:
         st.error(f"Error fetching headlines from {source}: {e}")
