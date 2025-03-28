@@ -119,17 +119,17 @@ def basic_impact(text: str) -> int:
     keywords = {
         "global": 100,
         "world": 90,
-        "nationwide": 80,
-        "government": 70,
+        "nationwide": 85,
+        "government": 80,
         "policy": 60,
         "state": 50,
         "local": 30,
-        "individual": 20,
+        "individual": 10,
         "family": 20,
         "community": 40,
-        "outbreak": 100,
-        "crisis": 90,
-        "pandemic": 100,
+        "outbreak": 89,
+        "crisis": 94,
+        "pandemic": 98,
     }
     score = 0
     text_lower = text.lower()
