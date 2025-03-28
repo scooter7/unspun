@@ -26,10 +26,13 @@ def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
     
-    - For CNN, scrapes the main page (https://www.cnn.com) and uses a union CSS selector to capture headline elements:
-      it targets both <h2 class="container__title_url-text container_lead-package__title_url-text"> and 
-      <span class="container__headline-text">. It then extracts the publication date from the article URL 
-      (looking for a /YYYY/MM/DD/ pattern) and only returns headlines from the past 24 hours.
+    - For CNN, scrapes the main page (https://www.cnn.com) using a union CSS selector that targets:
+      • h2.container__title_url-text.container_lead-package__title_url-text
+      • span.container__headline-text
+      • a elements inside div.container_lead-package__cards-wrapper
+      For each element, the article URL is extracted (from the parent anchor if needed), then a regex is used
+      to extract a publication date in the format /YYYY/MM/DD/ from the URL. Only headlines from the past 24 hours
+      are kept.
     - For Fox News, MSNBC, and Breitbart, existing methods are used.
     """
     headlines = []
@@ -39,17 +42,32 @@ def get_headlines(url: str, source: str) -> list:
             response = requests.get(cnn_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            # Use a union CSS selector to capture both headline element types.
-            elements = soup.select("h2.container__title_url-text.container_lead-package__title_url-text, span.container__headline-text")
+            # Use a union of selectors:
+            #   • h2 with classes,
+            #   • span with class "container__headline-text",
+            #   • a tags within div.container_lead-package__cards-wrapper
+            elements = soup.select(
+                "h2.container__title_url-text.container_lead-package__title_url-text, "
+                "span.container__headline-text, "
+                "div.container_lead-package__cards-wrapper a"
+            )
             # Regex to capture publication date from URL (e.g., /2023/04/01/)
             date_pattern = re.compile(r'/(\d{4})/(\d{2})/(\d{2})/')
             cnn_headlines = []
             for el in elements:
-                headline_text = el.get_text(strip=True)
-                parent_a = el.find_parent("a")
-                if not parent_a:
-                    continue
-                link = parent_a.get("href")
+                # If the element is an <a>, get the descendant span text
+                if el.name == "a":
+                    span = el.find("span")
+                    if not span:
+                        continue
+                    headline_text = span.get_text(strip=True)
+                    link = el.get("href")
+                else:
+                    headline_text = el.get_text(strip=True)
+                    parent_a = el.find_parent("a")
+                    if not parent_a:
+                        continue
+                    link = parent_a.get("href")
                 if not link:
                     continue
                 if not link.startswith("http"):
@@ -63,7 +81,7 @@ def get_headlines(url: str, source: str) -> list:
                             cnn_headlines.append({"title": headline_text, "link": link})
                     except Exception:
                         continue
-                # Skip headlines if no publication date is found.
+                # If no date is found, skip the headline.
                 if len(cnn_headlines) >= 10:
                     break
             headlines = cnn_headlines[:10]
@@ -220,7 +238,7 @@ def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
     return summary
 
 # ----------------------------------------------------------------------
-# 2. Main App Function
+# 2. Main App Function (Overlapping Stories section removed)
 # ----------------------------------------------------------------------
 def main():
     st.title("Unbiased News Aggregator")
