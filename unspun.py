@@ -9,6 +9,7 @@ from sklearn.cluster import DBSCAN
 import plotly.graph_objects as go
 import datetime
 import email.utils
+import re
 
 # ----------------------------------------------------------------------
 # 1. Configuration and Helper Functions
@@ -53,13 +54,12 @@ def get_headlines(url: str, source: str) -> list:
             recent_items = filter_recent_items(items, max_age_hours=24)
             items = recent_items[:10]
             # Return list of dicts with 'title' and 'link'
-            headlines = [{"title": item.title.get_text(strip=True), "link": item.link.get_text(strip=True)} 
+            headlines = [{"title": item.title.get_text(strip=True), "link": item.link.get_text(strip=True)}
                          for item in items if item.title and item.link]
         elif source in ["MSNBC", "Breitbart"]:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            # For these sources, we only extract the headline text; link is None.
             if source == "Breitbart":
                 elements = soup.find_all("h1")
                 if len(elements) < 10:
@@ -73,8 +73,7 @@ def get_headlines(url: str, source: str) -> list:
 
 def get_article_content(url: str) -> str:
     """
-    Fetches the article content from the given URL.
-    This function uses a simple approach by extracting all <p> tags.
+    Fetches the article content from the given URL by extracting all <p> tags.
     """
     try:
         response = requests.get(url, timeout=10)
@@ -92,54 +91,51 @@ def perform_sentiment_analysis(text: str) -> float:
     analysis = TextBlob(text)
     return analysis.sentiment.polarity
 
-def basic_impact(text: str) -> int:
+def measure_impact(text: str, link: str = None) -> int:
     """
-    Estimates an impact score (0 to 100) based on keywords found in the text.
-    Returns 0 if no keywords are found.
+    Uses OpenAI's Chat API to provide a human-like judgment of impact.
+    If a link is available and the headline is brief, a snippet of the article content is appended.
+    The prompt instructs the model to rate the potential impact on a scale from 0 to 100,
+    where the rating considers not just literal numbers but broader implications.
     """
-    keywords = {
-        "global": 100,
-        "world": 90,
-        "nationwide": 80,
-        "government": 70,
-        "policy": 60,
-        "state": 50,
-        "local": 30,
-        "individual": 20,
-        "family": 20,
-        "community": 40,
-        "outbreak": 100,
-        "crisis": 90,
-        "pandemic": 100,
-    }
-    score = 0
-    text_lower = text.lower()
-    for key, value in keywords.items():
-        if key in text_lower:
-            score = max(score, value)
-    return score
-
-def measure_impact(headline: str, link: str = None) -> int:
-    """
-    First computes the impact score from the headline.
-    If that score is low (< 30) and a link is provided, fetch the article content
-    and compute an impact score from the content.
-    Returns the higher of the two scores or a default baseline of 20 if none are found.
-    """
-    headline_score = basic_impact(headline)
-    content_score = 0
-    if headline_score < 30 and link:
+    # Use the headline as the base content.
+    content = text
+    if link:
         article_text = get_article_content(link)
-        if article_text:
-            content_score = basic_impact(article_text)
-    final_score = max(headline_score, content_score)
-    # If still zero, return a baseline score.
-    return final_score if final_score > 0 else 20
+        # If the article text is long, take a snippet.
+        if article_text and len(article_text) > 200:
+            content += "\n\n" + article_text[:500]  # first 500 characters
+    prompt = (
+        "You are an expert news analyst. Given the following news story, "
+        "rate its potential impact on a scale from 0 to 100. Consider both direct effects and broader implications. "
+        "Even if only one person is mentioned, think about the ripple effects on society. "
+        "Provide only a single integer as your answer.\n\n"
+        "News Story:\n" + content + "\n\nImpact Score:"
+    )
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=10,
+            temperature=0.0,
+            n=1
+        )
+        result = response['choices'][0]['message']['content'].strip()
+        # Extract the first integer found in the response.
+        numbers = re.findall(r'\d+', result)
+        if numbers:
+            impact_score = int(numbers[0])
+        else:
+            impact_score = 20  # fallback baseline
+    except Exception as e:
+        st.error(f"Error calculating impact score: {e}")
+        impact_score = 20
+    return impact_score
 
 def get_unbiased_summary(cluster_headlines: list) -> str:
     """
-    Uses OpenAI's Chat Completions API with the gpt-4o-mini model
-    to generate an unbiased summary from a cluster of headlines.
+    Uses OpenAI's Chat API with the gpt-4o-mini model to generate an unbiased summary
+    from a cluster of headlines.
     """
     prompt = "The following are news headlines from various sources. " \
              "Summarize the overall story in a neutral, unbiased manner, " \
@@ -169,7 +165,6 @@ def cluster_headlines(headlines: list) -> list:
     """
     if not headlines:
         return []
-    # Extract headline texts only.
     texts = [h["title"] for h in headlines]
     vectorizer = TfidfVectorizer(stop_words="english")
     X = vectorizer.fit_transform(texts)
@@ -188,7 +183,7 @@ def main():
     st.title("Unbiased News Aggregator")
     st.write(
         "This app fetches the latest headlines from CNN, Fox News, MSNBC, and Breitbart. "
-        "It performs sentiment analysis, gauges the impact of each story (digging into article content if needed), "
+        "It performs sentiment analysis, gauges the impact of each story (using human-like judgment), "
         "clusters overlapping stories, and generates an unbiased summary using the gpt-4o-mini model."
     )
 
@@ -229,15 +224,13 @@ def main():
     st.header("Headlines with Metrics")
     # Display each headline with its sentiment gauge and impact gauge.
     for idx, row in df.iterrows():
-        # Display headline and source (if a link is available, make it clickable)
         if row["Link"]:
             st.markdown(f"**[{row['Headline']}]({row['Link']})**  _(Source: {row['Source']})_")
         else:
             st.markdown(f"**{row['Headline']}**  _(Source: {row['Source']})_")
         col1, col2 = st.columns(2)
-        # Sentiment gauge in the first column.
         with col1:
-            # Transform sentiment (-1 to 1) to a 0 to 100 scale.
+            # Transform sentiment (-1 to 1) to a scale of 0 to 100.
             transformed_sentiment = (row["Sentiment"] + 1) * 50
             sentiment_fig = go.Figure(go.Indicator(
                 mode="gauge+number",
@@ -259,7 +252,6 @@ def main():
                 }
             ))
             st.plotly_chart(sentiment_fig, use_container_width=True, key=f"sentiment_{idx}")
-        # Impact gauge in the second column (using a progress bar).
         with col2:
             impact_value = int(row["Impact"])
             st.progress(impact_value / 100)
