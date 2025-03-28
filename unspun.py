@@ -7,6 +7,8 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import DBSCAN
 import plotly.graph_objects as go
+import datetime
+import email.utils
 
 # ----------------------------------------------------------------------
 # 1. Configuration and Helper Functions
@@ -15,35 +17,52 @@ import plotly.graph_objects as go
 # Set up OpenAI API key from Streamlit secrets.
 openai.api_key = st.secrets["OPENAI"]["API_KEY"]
 
+def filter_recent_items(items, max_age_hours=24):
+    """Filter RSS items to include only those published within max_age_hours."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    threshold = datetime.timedelta(hours=max_age_hours)
+    recent_items = []
+    for item in items:
+        if item.pubDate:
+            try:
+                pub_date = email.utils.parsedate_to_datetime(item.pubDate.get_text())
+                if (now - pub_date) <= threshold:
+                    recent_items.append(item)
+            except Exception:
+                recent_items.append(item)  # If date parsing fails, include the item.
+        else:
+            recent_items.append(item)
+    return recent_items
+
 @st.cache_data(show_spinner=False)
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
-    For CNN and Fox News, uses their RSS feeds with the lxml-xml parser.
+    For CNN and Fox News, uses their RSS feeds with the lxml-xml parser,
+    and filters for stories published within the last 24 hours.
     For MSNBC and Breitbart, attempts to scrape from the provided URL.
     """
     headlines = []
     try:
-        if source == "CNN":
-            # Use CNN's RSS feed
-            rss_url = "http://rss.cnn.com/rss/edition.rss"
+        if source in ["CNN", "Fox News"]:
+            # Use RSS feeds with the lxml-xml parser.
+            rss_url = (
+                "http://rss.cnn.com/rss/edition.rss"
+                if source == "CNN"
+                else "https://feeds.foxnews.com/foxnews/latest"
+            )
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "lxml-xml")
-            items = soup.find_all("item")[:10]
-            headlines = [item.title.get_text(strip=True) for item in items if item.title]
-        
-        elif source == "Fox News":
-            # Use Fox News's RSS feed
-            rss_url = "https://feeds.foxnews.com/foxnews/latest"
-            response = requests.get(rss_url, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, "lxml-xml")
-            items = soup.find_all("item")[:10]
+            items = soup.find_all("item")
+            # Filter to include only recent items (last 24 hours)
+            recent_items = filter_recent_items(items, max_age_hours=24)
+            # Limit to 10 items.
+            items = recent_items[:10]
             headlines = [item.title.get_text(strip=True) for item in items if item.title]
         
         elif source == "MSNBC":
-            # MSNBC: try scraping from the provided URL using h2 tags
+            # Scrape from the main page using h2 tags.
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
@@ -51,7 +70,7 @@ def get_headlines(url: str, source: str) -> list:
             headlines = [el.get_text(strip=True) for el in elements][:10]
         
         elif source == "Breitbart":
-            # Breitbart: attempt h1 tags, fallback to h2 tags
+            # Scrape from the main page: try h1 tags, fallback to h2.
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
@@ -187,7 +206,7 @@ def main():
         col1, col2 = st.columns(2)
         # Sentiment gauge in the first column.
         with col1:
-            # Transform sentiment (-1 to 1) to scale 0 to 100.
+            # Transform sentiment (-1 to 1) to a 0 to 100 scale.
             transformed_sentiment = (row["Sentiment"] + 1) * 50
             sentiment_fig = go.Figure(go.Indicator(
                 mode="gauge+number",
