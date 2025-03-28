@@ -18,26 +18,26 @@ openai.api_key = st.secrets["OPENAI"]["API_KEY"]
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
-    For CNN and Fox News, uses their RSS feeds.
+    For CNN and Fox News, uses their RSS feeds with lxml-xml parser.
     For MSNBC and Breitbart, attempts to scrape from the provided URL.
     """
     headlines = []
     try:
         if source == "CNN":
-            # Use CNN's RSS feed
+            # Use CNN's RSS feed with the lxml-xml parser
             rss_url = "http://rss.cnn.com/rss/edition.rss"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
-            soup = BeautifulSoup(response.content, "xml")
+            soup = BeautifulSoup(response.content, "lxml-xml")
             items = soup.find_all("item")[:10]
             headlines = [item.title.get_text(strip=True) for item in items if item.title]
         
         elif source == "Fox News":
-            # Use Fox News's RSS feed
+            # Use Fox News's RSS feed with the lxml-xml parser
             rss_url = "https://feeds.foxnews.com/foxnews/latest"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
-            soup = BeautifulSoup(response.content, "xml")
+            soup = BeautifulSoup(response.content, "lxml-xml")
             items = soup.find_all("item")[:10]
             headlines = [item.title.get_text(strip=True) for item in items if item.title]
         
@@ -64,9 +64,7 @@ def get_headlines(url: str, source: str) -> list:
     return headlines
 
 def perform_sentiment_analysis(text: str) -> float:
-    """
-    Returns the sentiment polarity of the text using TextBlob.
-    """
+    """Returns the sentiment polarity of the text using TextBlob."""
     analysis = TextBlob(text)
     return analysis.sentiment.polarity
 
@@ -111,9 +109,7 @@ def get_unbiased_summary(cluster_headlines: list) -> str:
     try:
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=150,
             temperature=0.7,
             n=1
@@ -153,7 +149,7 @@ def main():
     )
 
     # Define the news sources and their URLs.
-    # For CNN and Fox News, the URLs here won't be used because we rely on RSS feeds.
+    # For CNN and Fox News, these URLs won't be used because we rely on RSS feeds.
     news_sources = {
         "CNN": "https://www.cnn.com",
         "Fox News": "https://www.foxnews.com",
