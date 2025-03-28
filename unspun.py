@@ -38,59 +38,64 @@ def filter_recent_items(items, max_age_hours=24):
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
-    For CNN and Fox News, uses their RSS feeds with the lxml-xml parser,
+    For CNN and Fox News, uses their RSS feeds (returning a dict with title and link)
     and filters for stories published within the last 24 hours.
-    For MSNBC and Breitbart, attempts to scrape from the provided URL.
+    For MSNBC and Breitbart, attempts to scrape from the provided URL (link is set to None).
     """
     headlines = []
     try:
         if source in ["CNN", "Fox News"]:
-            # Use RSS feeds with the lxml-xml parser.
-            rss_url = (
-                "http://rss.cnn.com/rss/edition.rss"
-                if source == "CNN"
-                else "https://feeds.foxnews.com/foxnews/latest"
-            )
+            rss_url = "http://rss.cnn.com/rss/edition.rss" if source == "CNN" else "https://feeds.foxnews.com/foxnews/latest"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "lxml-xml")
             items = soup.find_all("item")
-            # Filter to include only recent items (last 24 hours)
             recent_items = filter_recent_items(items, max_age_hours=24)
-            # Limit to 10 items.
             items = recent_items[:10]
-            headlines = [item.title.get_text(strip=True) for item in items if item.title]
-        
-        elif source == "MSNBC":
-            # Scrape from the main page using h2 tags.
+            # Return list of dicts with 'title' and 'link'
+            headlines = [{"title": item.title.get_text(strip=True), "link": item.link.get_text(strip=True)} 
+                         for item in items if item.title and item.link]
+        elif source in ["MSNBC", "Breitbart"]:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            elements = soup.find_all("h2")
-            headlines = [el.get_text(strip=True) for el in elements][:10]
-        
-        elif source == "Breitbart":
-            # Scrape from the main page: try h1 tags, fallback to h2.
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            elements = soup.find_all("h1")
-            if len(elements) < 10:
+            # For these sources, we only extract the headline text; link is None.
+            if source == "Breitbart":
+                elements = soup.find_all("h1")
+                if len(elements) < 10:
+                    elements = soup.find_all("h2")
+            else:
                 elements = soup.find_all("h2")
-            headlines = [el.get_text(strip=True) for el in elements][:10]
-            
+            headlines = [{"title": el.get_text(strip=True), "link": None} for el in elements][:10]
     except Exception as e:
         st.error(f"Error fetching headlines from {source}: {e}")
     return headlines
+
+def get_article_content(url: str) -> str:
+    """
+    Fetches the article content from the given URL.
+    This function uses a simple approach by extracting all <p> tags.
+    """
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        paragraphs = soup.find_all("p")
+        content = " ".join(p.get_text(strip=True) for p in paragraphs)
+        return content
+    except Exception as e:
+        st.error(f"Error fetching article content from {url}: {e}")
+        return ""
 
 def perform_sentiment_analysis(text: str) -> float:
     """Returns the sentiment polarity of the text using TextBlob."""
     analysis = TextBlob(text)
     return analysis.sentiment.polarity
 
-def measure_impact(text: str) -> int:
+def basic_impact(text: str) -> int:
     """
-    Estimates an impact score (0 to 100) based on key trigger words.
+    Estimates an impact score (0 to 100) based on keywords found in the text.
+    Returns 0 if no keywords are found.
     """
     keywords = {
         "global": 100,
@@ -113,6 +118,23 @@ def measure_impact(text: str) -> int:
         if key in text_lower:
             score = max(score, value)
     return score
+
+def measure_impact(headline: str, link: str = None) -> int:
+    """
+    First computes the impact score from the headline.
+    If that score is low (< 30) and a link is provided, fetch the article content
+    and compute an impact score from the content.
+    Returns the higher of the two scores or a default baseline of 20 if none are found.
+    """
+    headline_score = basic_impact(headline)
+    content_score = 0
+    if headline_score < 30 and link:
+        article_text = get_article_content(link)
+        if article_text:
+            content_score = basic_impact(article_text)
+    final_score = max(headline_score, content_score)
+    # If still zero, return a baseline score.
+    return final_score if final_score > 0 else 20
 
 def get_unbiased_summary(cluster_headlines: list) -> str:
     """
@@ -142,19 +164,21 @@ def get_unbiased_summary(cluster_headlines: list) -> str:
 def cluster_headlines(headlines: list) -> list:
     """
     Clusters headlines using TF-IDF vectorization and DBSCAN.
-    Returns a list of clusters (each cluster is a list of headlines).
+    Returns a list of clusters (each cluster is a list of headline texts).
     Headlines not grouped (noise) are omitted.
     """
     if not headlines:
         return []
+    # Extract headline texts only.
+    texts = [h["title"] for h in headlines]
     vectorizer = TfidfVectorizer(stop_words="english")
-    X = vectorizer.fit_transform(headlines)
+    X = vectorizer.fit_transform(texts)
     clustering = DBSCAN(eps=0.5, min_samples=2, metric="cosine").fit(X)
     clusters = {}
     for idx, label in enumerate(clustering.labels_):
         if label == -1:
             continue
-        clusters.setdefault(label, []).append(headlines[idx])
+        clusters.setdefault(label, []).append(texts[idx])
     return list(clusters.values())
 
 # ----------------------------------------------------------------------
@@ -164,8 +188,8 @@ def main():
     st.title("Unbiased News Aggregator")
     st.write(
         "This app fetches the latest headlines from CNN, Fox News, MSNBC, and Breitbart. "
-        "It performs sentiment analysis, gauges the impact of each story, clusters overlapping "
-        "stories, and generates an unbiased summary using the gpt-4o-mini model."
+        "It performs sentiment analysis, gauges the impact of each story (digging into article content if needed), "
+        "clusters overlapping stories, and generates an unbiased summary using the gpt-4o-mini model."
     )
 
     # Define the news sources and their URLs.
@@ -188,12 +212,15 @@ def main():
     # Process headlines to compute sentiment and impact.
     data = []
     for source, headlines in all_headlines.items():
-        for headline in headlines:
-            sentiment = perform_sentiment_analysis(headline)
-            impact = measure_impact(headline)
+        for item in headlines:
+            title = item["title"]
+            link = item.get("link")
+            sentiment = perform_sentiment_analysis(title)
+            impact = measure_impact(title, link)
             data.append({
                 "Source": source,
-                "Headline": headline,
+                "Headline": title,
+                "Link": link,
                 "Sentiment": sentiment,
                 "Impact": impact
             })
@@ -202,7 +229,11 @@ def main():
     st.header("Headlines with Metrics")
     # Display each headline with its sentiment gauge and impact gauge.
     for idx, row in df.iterrows():
-        st.markdown(f"**{row['Headline']}**  _(Source: {row['Source']})_")
+        # Display headline and source (if a link is available, make it clickable)
+        if row["Link"]:
+            st.markdown(f"**[{row['Headline']}]({row['Link']})**  _(Source: {row['Source']})_")
+        else:
+            st.markdown(f"**{row['Headline']}**  _(Source: {row['Source']})_")
         col1, col2 = st.columns(2)
         # Sentiment gauge in the first column.
         with col1:
@@ -239,9 +270,9 @@ def main():
     st.header("Overlapping Stories & Unbiased Summaries")
     combined_headlines = []
     for headlines in all_headlines.values():
-        combined_headlines.extend(headlines)
-
-    clusters = cluster_headlines(combined_headlines)
+        for item in headlines:
+            combined_headlines.append(item["title"])
+    clusters = cluster_headlines([{"title": h} for h in combined_headlines])
     if clusters:
         for i, cluster in enumerate(clusters):
             st.markdown(f"### Overlapping Story Cluster {i+1}")
