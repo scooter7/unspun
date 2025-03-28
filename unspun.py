@@ -26,48 +26,48 @@ def get_headlines(url: str, source: str) -> list:
         soup = BeautifulSoup(response.text, 'html.parser')
         
         if source == "CNN":
-            # CNN: Use the text within span tags with class 'cd__headline-text'
-            elements = soup.select("h3.cd__headline span.cd__headline-text")
+            # CNN: First try to select headlines using the span with 'cd__headline-text'
+            elements = soup.select("span.cd__headline-text")
+            # If not found, fallback to h3 elements with class 'cd__headline'
+            if not elements:
+                elements = soup.select("h3.cd__headline")
             headlines = [el.get_text(strip=True) for el in elements][:10]
         
         elif source == "Fox News":
-            # Fox News: First try anchor tags with href containing '/story/'
+            # Fox News: Use anchor tags with '/story/' in their href
             anchors = soup.find_all("a", href=True)
             filtered_headlines = []
-            unwanted = [
-                "America Together", "Entertainment", "Personal Finance", 
-                "Faith & Values", "Travel + Outdoors", "Food + Drink", 
-                "FOX Weather", "Full Episodes", "Latest Wires", "Antisemitism Exposed",
-                "Fox Around the World", "RSS"
-            ]
+            # Expanded list of unwanted text values
+            unwanted = {
+                "games hub", "america together", "entertainment", "personal finance", 
+                "faith & values", "travel + outdoors", "food + drink", "fox weather",
+                "full episodes", "latest wires", "antisemitism exposed", "fox around the world",
+                "rss", "world", "opinion", "outkick", "digital originals", "economy",
+                "fox news flash", "elections", "personal freedoms"
+            }
             for a in anchors:
                 href = a.get("href")
                 if "/story/" in href:
                     text = a.get_text(strip=True)
-                    if text and not any(un.lower() in text.lower() for un in unwanted):
-                        if text not in filtered_headlines:
-                            filtered_headlines.append(text)
+                    # Skip if text is too short (likely not a news headline)
+                    if len(text) < 15:
+                        continue
+                    # Skip if the text matches any unwanted phrase (case-insensitive)
+                    if text.lower() in unwanted:
+                        continue
+                    if text not in filtered_headlines:
+                        filtered_headlines.append(text)
                 if len(filtered_headlines) >= 10:
                     break
-            # Fallback: if not enough headlines, try h2 tags with class 'title'
-            if len(filtered_headlines) < 10:
-                h2_elements = soup.find_all("h2", class_="title")
-                for el in h2_elements:
-                    text = el.get_text(strip=True)
-                    if text and not any(un.lower() in text.lower() for un in unwanted):
-                        if text not in filtered_headlines:
-                            filtered_headlines.append(text)
-                    if len(filtered_headlines) >= 10:
-                        break
             headlines = filtered_headlines[:10]
         
         elif source == "MSNBC":
-            # MSNBC: try <h2> tags as a starting point.
+            # MSNBC: try h2 tags as a starting point.
             elements = soup.find_all("h2")
             headlines = [el.get_text(strip=True) for el in elements][:10]
         
         elif source == "Breitbart":
-            # Breitbart: sometimes headlines are in <h1>, fallback to <h2>
+            # Breitbart: sometimes headlines are in h1; fallback to h2 if needed.
             elements = soup.find_all("h1")
             if len(elements) < 10:
                 elements = soup.find_all("h2")
