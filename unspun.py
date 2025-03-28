@@ -24,15 +24,26 @@ def get_headlines(url: str, source: str) -> list:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        # Use source-specific scraping logic
+        
         if source == "CNN":
             # CNN: headlines may be in <h3> with class "cd__headline"
             elements = soup.find_all("h3", class_="cd__headline")
             headlines = [el.get_text(strip=True) for el in elements][:10]
         elif source == "Fox News":
-            # Fox News: headlines may appear in <h2> tags (adjust if needed)
-            elements = soup.find_all("h2")
-            headlines = [el.get_text(strip=True) for el in elements][:10]
+            # Fox News: try selectors targeting headline elements.
+            # We use a CSS selector for h2 tags with class "title" or containing "headline"
+            elements = soup.select("h2.title, h2[class*='headline']")
+            raw_headlines = [el.get_text(strip=True) for el in elements]
+            # Filter out known unwanted phrases that appear in navigation or promo sections.
+            unwanted = [
+                "Games Hub", "Fox Nation", "OutKick", "Digital Originals",
+                "Economy", "Fox News Flash", "Elections", "Personal Freedoms"
+            ]
+            headlines = [
+                h for h in raw_headlines
+                if not any(un.lower() in h.lower() for un in unwanted)
+                and len(h) > 10  # Filter out very short strings.
+            ][:10]
         elif source == "MSNBC":
             # MSNBC: try <h2> tags as a starting point.
             elements = soup.find_all("h2")
@@ -99,7 +110,7 @@ def get_unbiased_summary(cluster_headlines: list) -> str:
                 {"role": "user", "content": prompt}
             ],
             max_tokens=150,
-            temperature=0.2,
+            temperature=0.7,
             n=1
         )
         summary = response['choices'][0]['message']['content'].strip()
