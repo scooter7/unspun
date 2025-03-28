@@ -6,3 +6,4 @@ textblob
 scikit-learn
 pandas
 lxml
+plotly
