@@ -35,13 +35,30 @@ def filter_recent_items(items, max_age_hours=24):
             recent_items.append(item)
     return recent_items
 
+def is_recent_element(element, max_age_hours=24):
+    """
+    For MSNBC/Breitbart elements, check for a <time> tag with a datetime attribute.
+    If found, parse it and return True only if it is within max_age_hours.
+    If no time tag is found, assume the element is recent.
+    """
+    time_tag = element.find("time")
+    if time_tag and time_tag.has_attr("datetime"):
+        try:
+            pub_date = email.utils.parsedate_to_datetime(time_tag["datetime"])
+            now = datetime.datetime.now(datetime.timezone.utc)
+            return (now - pub_date) <= datetime.timedelta(hours=max_age_hours)
+        except Exception:
+            return True
+    return True
+
 @st.cache_data(show_spinner=False)
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
     For CNN and Fox News, uses their RSS feeds (returning a dict with title and link)
     and filters for stories published within the last 24 hours.
-    For MSNBC and Breitbart, attempts to scrape from the provided URL (link is set to None).
+    For MSNBC and Breitbart, attempts to scrape from the provided URL (link is set to None)
+    and, if available, uses nearby <time> tags to filter headlines by recency.
     """
     headlines = []
     try:
@@ -53,7 +70,6 @@ def get_headlines(url: str, source: str) -> list:
             items = soup.find_all("item")
             recent_items = filter_recent_items(items, max_age_hours=24)
             items = recent_items[:10]
-            # Return list of dicts with 'title' and 'link'
             headlines = [{"title": item.title.get_text(strip=True), "link": item.link.get_text(strip=True)}
                          for item in items if item.title and item.link]
         elif source in ["MSNBC", "Breitbart"]:
@@ -66,6 +82,8 @@ def get_headlines(url: str, source: str) -> list:
                     elements = soup.find_all("h2")
             else:
                 elements = soup.find_all("h2")
+            # Filter elements by recency if a <time> tag is present.
+            elements = [el for el in elements if is_recent_element(el, max_age_hours=24)]
             headlines = [{"title": el.get_text(strip=True), "link": None} for el in elements][:10]
     except Exception as e:
         st.error(f"Error fetching headlines from {source}: {e}")
@@ -125,12 +143,10 @@ def measure_impact(text: str, link: str = None) -> int:
     The prompt instructs the model to rate the potential impact on a scale from 0 to 100,
     considering both direct effects and broader implications.
     """
-    # Use the headline as the base content.
     content = text
     if link:
         article_text = get_article_content(link)
         if article_text and len(article_text) > 200:
-            # Use a snippet (first 500 characters) to keep prompt manageable.
             content += "\n\n" + article_text[:500]
     prompt = (
         "You are an expert news analyst. Given the following news story, "
@@ -168,7 +184,6 @@ def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
     if link:
         article_text = get_article_content(link)
         if article_text:
-            # Limit to first 2000 characters to avoid huge prompts.
             if len(article_text) > 2000:
                 article_text = article_text[:2000] + " ... [truncated]"
             content += "\n\n" + article_text
@@ -254,9 +269,9 @@ def main():
             })
     df = pd.DataFrame(data)
 
-    # --- New Section: Top 10 High Impact Story Summaries ---
+    # --- Top 10 High Impact Story Summaries Section ---
     st.header("Top 10 High Impact Story Summaries")
-    # Sort stories by Impact score (descending) and select top 10.
+    # Sort stories by Impact score (descending) and select the top 10.
     top_stories = df.sort_values(by="Impact", ascending=False).head(10)
     for idx, row in top_stories.iterrows():
         if row["Link"]:
@@ -267,7 +282,7 @@ def main():
         st.write(summary)
         st.markdown("---")
     
-    # --- Existing Section: Headlines with Metrics ---
+    # --- Headlines with Metrics Section ---
     st.header("Headlines with Metrics")
     for idx, row in df.iterrows():
         if row["Link"]:
@@ -303,7 +318,7 @@ def main():
             st.write(f"Impact Score: {impact_value}/100")
         st.markdown("---")
     
-    # --- Existing Section: Overlapping Stories & Unbiased Summaries ---
+    # --- Overlapping Stories & Unbiased Summaries Section ---
     st.header("Overlapping Stories & Unbiased Summaries")
     combined_headlines = []
     for headlines in all_headlines.values():
