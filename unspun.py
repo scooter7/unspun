@@ -91,12 +91,39 @@ def perform_sentiment_analysis(text: str) -> float:
     analysis = TextBlob(text)
     return analysis.sentiment.polarity
 
+def basic_impact(text: str) -> int:
+    """
+    Estimates an impact score (0 to 100) based on direct keyword matches.
+    Returns 0 if no keywords are found.
+    """
+    keywords = {
+        "global": 100,
+        "world": 90,
+        "nationwide": 80,
+        "government": 70,
+        "policy": 60,
+        "state": 50,
+        "local": 30,
+        "individual": 20,
+        "family": 20,
+        "community": 40,
+        "outbreak": 100,
+        "crisis": 90,
+        "pandemic": 100,
+    }
+    score = 0
+    text_lower = text.lower()
+    for key, value in keywords.items():
+        if key in text_lower:
+            score = max(score, value)
+    return score
+
 def measure_impact(text: str, link: str = None) -> int:
     """
     Uses OpenAI's Chat API to provide a human-like judgment of impact.
     If a link is available and the headline is brief, a snippet of the article content is appended.
     The prompt instructs the model to rate the potential impact on a scale from 0 to 100,
-    where the rating considers not just literal numbers but broader implications.
+    where the rating considers both direct effects and broader implications.
     """
     # Use the headline as the base content.
     content = text
@@ -120,7 +147,8 @@ def measure_impact(text: str, link: str = None) -> int:
             temperature=0.0,
             n=1
         )
-        result = response['choices'][0]['message']['content'].strip()
+        # Use dot notation to extract the content.
+        result = response.choices[0].message["content"].strip()
         # Extract the first integer found in the response.
         numbers = re.findall(r'\d+', result)
         if numbers:
@@ -152,7 +180,7 @@ def get_unbiased_summary(cluster_headlines: list) -> str:
             temperature=0.7,
             n=1
         )
-        summary = response['choices'][0]['message']['content'].strip()
+        summary = response.choices[0].message["content"].strip()
     except Exception as e:
         summary = "Error generating summary: " + str(e)
     return summary
