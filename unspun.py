@@ -6,7 +6,6 @@ from textblob import TextBlob
 import pandas as pd
 import plotly.graph_objects as go
 import datetime
-import email.utils
 import re
 
 # ----------------------------------------------------------------------
@@ -16,95 +15,65 @@ import re
 # Set up OpenAI API key from Streamlit secrets.
 openai.api_key = st.secrets["OPENAI"]["API_KEY"]
 
-def is_recent_date(pub_date: datetime.datetime, max_age_hours=24) -> bool:
-    """Return True if pub_date is within the past max_age_hours."""
-    now = datetime.datetime.now(pub_date.tzinfo) if pub_date.tzinfo else datetime.datetime.now()
-    return (now - pub_date).total_seconds() <= max_age_hours * 3600
+# Define a headers dictionary to mimic a real browser.
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/103.0.0.0 Safari/537.36"
+    )
+}
 
 @st.cache_data(show_spinner=False)
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
     
-    - For CNN, scrapes the main page (https://www.cnn.com) using a union CSS selector that targets:
-      • h2 elements with class "container__title_url-text container_lead-package__title_url-text"
-      • span elements with class "container__headline-text"
-      • span elements with attribute data-editable="headline"
-      • a elements inside div.container_lead-package__cards-wrapper
-      For each element, the article URL is extracted (from the parent anchor if needed) and the headline text is captured.
-      A heuristic is applied to only keep headlines with at least 5 words.
-      
-    - For Fox News, MSNBC, and Breitbart, the existing methods are used.
+    - For CNN, we scrape the main page (https://www.cnn.com) with a browser-like User-Agent.
+      We use a union CSS selector that targets:
+         • <span data-editable="headline"> elements,
+         • <span class="container__headline-text"> elements,
+         • <h2 class="container__title_url-text"> elements.
+      Then we filter out any headline with fewer than 5 words.
+    
+    - For Fox News, MSNBC, and Breitbart, existing methods (using RSS for Fox News and simple scraping for MSNBC/Breitbart) are used.
     """
     headlines = []
     try:
         if source == "CNN":
             cnn_url = "https://www.cnn.com"
-            response = requests.get(cnn_url, timeout=10)
+            response = requests.get(cnn_url, headers=HEADERS, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            # Use a union of selectors:
+            # Use a union selector to capture possible headline elements.
             elements = soup.select(
-                "h2.container__title_url-text.container_lead-package__title_url-text, "
-                "span.container__headline-text, "
-                "span[data-editable='headline'], "
-                "div.container_lead-package__cards-wrapper a"
+                "span[data-editable='headline'], span.container__headline-text, h2.container__title_url-text"
             )
-            # Regex to capture publication date from URL (e.g., /2023/04/01/)
-            date_pattern = re.compile(r'/(\d{4})/(\d{2})/(\d{2})/')
             cnn_headlines = []
             for el in elements:
                 headline_text = el.get_text(strip=True)
-                # Skip if the headline is too short (heuristic: less than 5 words).
+                # Filter out headlines with fewer than 5 words.
                 if len(headline_text.split()) < 5:
                     continue
-                # Determine the headline text and URL:
-                if el.name == "a":
-                    span = el.find("span")
-                    if span:
-                        headline_text = span.get_text(strip=True)
-                    link = el.get("href")
-                else:
-                    parent_a = el.find_parent("a")
-                    if not parent_a:
-                        continue
-                    link = parent_a.get("href")
+                # Attempt to get the parent anchor to retrieve the link.
+                parent_a = el.find_parent("a")
+                if not parent_a:
+                    continue
+                link = parent_a.get("href")
                 if not link:
                     continue
                 if not link.startswith("http"):
                     link = "https://www.cnn.com" + link
-                match = date_pattern.search(link)
-                if match:
-                    year, month, day = match.groups()
-                    try:
-                        pub_date = datetime.datetime(int(year), int(month), int(day))
-                        if is_recent_date(pub_date, max_age_hours=24):
-                            cnn_headlines.append({"title": headline_text, "link": link})
-                    except Exception:
-                        continue
-                # If no date is found, skip this headline.
+                cnn_headlines.append({"title": headline_text, "link": link})
                 if len(cnn_headlines) >= 10:
                     break
-            headlines = cnn_headlines[:10]
+            headlines = cnn_headlines
         elif source == "Fox News":
             rss_url = "https://feeds.foxnews.com/foxnews/latest"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "lxml-xml")
-            items = soup.find_all("item")
-            recent_items = []
-            now = datetime.datetime.now(datetime.timezone.utc)
-            for item in items:
-                if item.pubDate:
-                    try:
-                        pub_date = email.utils.parsedate_to_datetime(item.pubDate.get_text())
-                        if (now - pub_date).total_seconds() <= 24 * 3600:
-                            recent_items.append(item)
-                    except Exception:
-                        recent_items.append(item)
-                else:
-                    recent_items.append(item)
-            items = recent_items[:10]
+            items = soup.find_all("item")[:10]
             headlines = [{"title": item.title.get_text(strip=True), "link": item.link.get_text(strip=True)}
                          for item in items if item.title and item.link]
         elif source in ["MSNBC", "Breitbart"]:
@@ -127,7 +96,7 @@ def get_article_content(url: str) -> str:
     Fetches the article content from the given URL by extracting text from all <p> tags.
     """
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         paragraphs = soup.find_all("p")
@@ -239,7 +208,7 @@ def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
     return summary
 
 # ----------------------------------------------------------------------
-# 2. Main App Function (Overlapping Stories section removed)
+# 2. Main App Function
 # ----------------------------------------------------------------------
 def main():
     st.title("Unbiased News Aggregator")
