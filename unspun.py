@@ -150,7 +150,6 @@ def main():
     )
 
     # Define the news sources and their URLs.
-    # For CNN and Fox News, these URLs won't be used because we rely on RSS feeds.
     news_sources = {
         "CNN": "https://www.cnn.com",
         "Fox News": "https://www.foxnews.com",
@@ -167,7 +166,7 @@ def main():
                 st.warning(f"No headlines fetched for {source}.")
             all_headlines[source] = headlines
 
-    # Build a DataFrame with sentiment and impact metrics.
+    # Process headlines to compute sentiment and impact.
     data = []
     for source, headlines in all_headlines.items():
         for headline in headlines:
@@ -180,44 +179,42 @@ def main():
                 "Impact": impact
             })
     df = pd.DataFrame(data)
-
+    
     st.header("Headlines with Metrics")
-    st.dataframe(df)
-
-    st.subheader("Impact Gauges")
+    # Instead of a simple dataframe, display each headline with its gauges.
     for idx, row in df.iterrows():
-        st.write(f"**{row['Headline']}** (Source: {row['Source']})")
-        gauge_value = int(row["Impact"])
-        st.progress(gauge_value)
-        st.write(f"Impact Score: {gauge_value}/100")
-        st.write("---")
-
-    # Create Sentiment Gauges (with needle and colored ranges)
-    st.header("Sentiment Gauges")
-    for idx, row in df.iterrows():
-        sentiment = row["Sentiment"]
-        # Transform sentiment from [-1, 1] to [0, 100]
-        transformed_sentiment = (sentiment + 1) * 50
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=transformed_sentiment,
-            title={"text": f"Sentiment ({row['Source']})"},
-            gauge={
-                "axis": {"range": [0, 100]},
-                "bar": {"color": "black"},
-                "steps": [
-                    {"range": [0, 33], "color": "red"},
-                    {"range": [33, 66], "color": "yellow"},
-                    {"range": [66, 100], "color": "green"}
-                ],
-                "threshold": {
-                    "line": {"color": "black", "width": 4},
-                    "thickness": 0.75,
-                    "value": transformed_sentiment
+        st.markdown(f"**{row['Headline']}**  _(Source: {row['Source']})_")
+        col1, col2 = st.columns(2)
+        # Display Sentiment Gauge in first column.
+        with col1:
+            # Transform sentiment (-1 to 1) to scale 0 to 100.
+            transformed_sentiment = (row["Sentiment"] + 1) * 50
+            sentiment_fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=transformed_sentiment,
+                title={"text": "Sentiment"},
+                gauge={
+                    "axis": {"range": [0, 100]},
+                    "bar": {"color": "black"},
+                    "steps": [
+                        {"range": [0, 33], "color": "red"},
+                        {"range": [33, 66], "color": "yellow"},
+                        {"range": [66, 100], "color": "green"}
+                    ],
+                    "threshold": {
+                        "line": {"color": "black", "width": 4},
+                        "thickness": 0.75,
+                        "value": transformed_sentiment
+                    }
                 }
-            }
-        ))
-        st.plotly_chart(fig)
+            ))
+            st.plotly_chart(sentiment_fig, use_container_width=True)
+        # Display Impact Gauge (as a progress bar) in the second column.
+        with col2:
+            impact_value = int(row["Impact"])
+            st.progress(impact_value / 100)
+            st.write(f"Impact Score: {impact_value}/100")
+        st.markdown("---")
     
     # Cluster headlines for overlapping stories.
     st.header("Overlapping Stories & Unbiased Summaries")
