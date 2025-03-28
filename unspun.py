@@ -181,11 +181,11 @@ def main():
     df = pd.DataFrame(data)
     
     st.header("Headlines with Metrics")
-    # Instead of a simple dataframe, display each headline with its gauges.
+    # Display each headline with its sentiment gauge and impact gauge.
     for idx, row in df.iterrows():
         st.markdown(f"**{row['Headline']}**  _(Source: {row['Source']})_")
         col1, col2 = st.columns(2)
-        # Display Sentiment Gauge in first column.
+        # Sentiment gauge in the first column.
         with col1:
             # Transform sentiment (-1 to 1) to scale 0 to 100.
             transformed_sentiment = (row["Sentiment"] + 1) * 50
@@ -208,8 +208,8 @@ def main():
                     }
                 }
             ))
-            st.plotly_chart(sentiment_fig, use_container_width=True)
-        # Display Impact Gauge (as a progress bar) in the second column.
+            st.plotly_chart(sentiment_fig, use_container_width=True, key=f"sentiment_{idx}")
+        # Impact gauge in the second column (using a progress bar).
         with col2:
             impact_value = int(row["Impact"])
             st.progress(impact_value / 100)
