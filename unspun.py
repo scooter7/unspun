@@ -26,13 +26,14 @@ def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
     
-    - For CNN, scrapes the main page (https://www.cnn.com) using a union CSS selector that targets:
+    - For CNN, scrapes the main page (https://www.cnn.com) and uses a union CSS selector that targets:
       • h2.container__title_url-text.container_lead-package__title_url-text
       • span.container__headline-text
+      • span[data-editable="headline"]
       • a elements inside div.container_lead-package__cards-wrapper
-      For each element, the article URL is extracted (from the parent anchor if needed), then a regex is used
-      to extract a publication date in the format /YYYY/MM/DD/ from the URL. Only headlines from the past 24 hours
-      are kept.
+      It extracts the article URL from the parent anchor and uses a regex to extract a publication date
+      (format: /YYYY/MM/DD/) from the URL. Only headlines from the past 24 hours are returned.
+      
     - For Fox News, MSNBC, and Breitbart, existing methods are used.
     """
     headlines = []
@@ -42,25 +43,25 @@ def get_headlines(url: str, source: str) -> list:
             response = requests.get(cnn_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            # Use a union of selectors:
-            #   • h2 with classes,
-            #   • span with class "container__headline-text",
-            #   • a tags within div.container_lead-package__cards-wrapper
+            # Use a union selector to capture multiple headline element types.
             elements = soup.select(
                 "h2.container__title_url-text.container_lead-package__title_url-text, "
                 "span.container__headline-text, "
+                "span[data-editable='headline'], "
                 "div.container_lead-package__cards-wrapper a"
             )
             # Regex to capture publication date from URL (e.g., /2023/04/01/)
             date_pattern = re.compile(r'/(\d{4})/(\d{2})/(\d{2})/')
             cnn_headlines = []
             for el in elements:
-                # If the element is an <a>, get the descendant span text
+                # Determine the headline text and URL:
                 if el.name == "a":
+                    # For <a> tags, get the descendant <span> if available.
                     span = el.find("span")
-                    if not span:
-                        continue
-                    headline_text = span.get_text(strip=True)
+                    if span:
+                        headline_text = span.get_text(strip=True)
+                    else:
+                        headline_text = el.get_text(strip=True)
                     link = el.get("href")
                 else:
                     headline_text = el.get_text(strip=True)
@@ -81,7 +82,7 @@ def get_headlines(url: str, source: str) -> list:
                             cnn_headlines.append({"title": headline_text, "link": link})
                     except Exception:
                         continue
-                # If no date is found, skip the headline.
+                # If no date is found in the URL, skip this headline.
                 if len(cnn_headlines) >= 10:
                     break
             headlines = cnn_headlines[:10]
@@ -200,7 +201,7 @@ def measure_impact(text: str, link: str = None) -> int:
         if numbers:
             impact_score = int(numbers[0])
         else:
-            impact_score = 20
+            impact_score = 20  # fallback baseline
     except Exception as e:
         st.error(f"Error calculating impact score: {e}")
         impact_score = 20
@@ -238,7 +239,7 @@ def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
     return summary
 
 # ----------------------------------------------------------------------
-# 2. Main App Function (Overlapping Stories section removed)
+# 2. Main App Function
 # ----------------------------------------------------------------------
 def main():
     st.title("Unbiased News Aggregator")
