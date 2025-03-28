@@ -29,31 +29,41 @@ def get_headlines(url: str, source: str) -> list:
             # CNN: headlines may be in <h3> with class "cd__headline"
             elements = soup.find_all("h3", class_="cd__headline")
             headlines = [el.get_text(strip=True) for el in elements][:10]
+        
         elif source == "Fox News":
-            # Fox News: try selectors targeting headline elements.
-            # We use a CSS selector for h2 tags with class "title" or containing "headline"
-            elements = soup.select("h2.title, h2[class*='headline']")
-            raw_headlines = [el.get_text(strip=True) for el in elements]
-            # Filter out known unwanted phrases that appear in navigation or promo sections.
+            # Fox News: scan for anchor tags with href containing '/story/'
+            anchors = soup.find_all("a", href=True)
+            filtered_headlines = []
             unwanted = [
-                "Games Hub", "Fox Nation", "OutKick", "Digital Originals",
-                "Economy", "Fox News Flash", "Elections", "Personal Freedoms"
+                "America Together", "Entertainment", "Personal Finance", 
+                "Faith & Values", "Travel + Outdoors", "Food + Drink", 
+                "FOX Weather", "Full Episodes", "Latest Wires", "Antisemitism Exposed"
             ]
-            headlines = [
-                h for h in raw_headlines
-                if not any(un.lower() in h.lower() for un in unwanted)
-                and len(h) > 10  # Filter out very short strings.
-            ][:10]
+            for a in anchors:
+                href = a.get("href")
+                if "/story/" in href:
+                    text = a.get_text(strip=True)
+                    # Filter out headlines that exactly match unwanted phrases.
+                    if any(unw.lower() == text.lower() for unw in unwanted):
+                        continue
+                    if text and text not in filtered_headlines:
+                        filtered_headlines.append(text)
+                if len(filtered_headlines) >= 10:
+                    break
+            headlines = filtered_headlines
+        
         elif source == "MSNBC":
             # MSNBC: try <h2> tags as a starting point.
             elements = soup.find_all("h2")
             headlines = [el.get_text(strip=True) for el in elements][:10]
+        
         elif source == "Breitbart":
             # Breitbart: sometimes headlines are in <h1>, fallback to <h2>
             elements = soup.find_all("h1")
             if len(elements) < 10:
                 elements = soup.find_all("h2")
             headlines = [el.get_text(strip=True) for el in elements][:10]
+            
     except Exception as e:
         st.error(f"Error fetching headlines from {source} ({url}): {e}")
     return headlines
@@ -93,7 +103,7 @@ def measure_impact(text: str) -> int:
 
 def get_unbiased_summary(cluster_headlines: list) -> str:
     """
-    Uses OpenAI's ChatCompletion API with the gpt-4o-mini model
+    Uses OpenAI's Chat Completions API with the gpt-4o-mini model
     to generate an unbiased summary from a cluster of headlines.
     """
     prompt = "The following are news headlines from various sources. " \
