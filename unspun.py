@@ -121,17 +121,17 @@ def basic_impact(text: str) -> int:
 def measure_impact(text: str, link: str = None) -> int:
     """
     Uses OpenAI's Chat API to provide a human-like judgment of impact.
-    If a link is available and the headline is brief, a snippet of the article content is appended.
+    If a link is available and the headline is brief, a snippet of the full article content is appended.
     The prompt instructs the model to rate the potential impact on a scale from 0 to 100,
-    where the rating considers both direct effects and broader implications.
+    considering both direct effects and broader implications.
     """
     # Use the headline as the base content.
     content = text
     if link:
         article_text = get_article_content(link)
-        # If the article text is long, take a snippet.
         if article_text and len(article_text) > 200:
-            content += "\n\n" + article_text[:500]  # first 500 characters
+            # Use a snippet (first 500 characters) to keep prompt manageable.
+            content += "\n\n" + article_text[:500]
     prompt = (
         "You are an expert news analyst. Given the following news story, "
         "rate its potential impact on a scale from 0 to 100. Consider both direct effects and broader implications. "
@@ -147,9 +147,7 @@ def measure_impact(text: str, link: str = None) -> int:
             temperature=0.0,
             n=1
         )
-        # Use dot notation to extract the content.
         result = response.choices[0].message.content.strip()
-        # Extract the first integer found in the response.
         numbers = re.findall(r'\d+', result)
         if numbers:
             impact_score = int(numbers[0])
@@ -160,18 +158,25 @@ def measure_impact(text: str, link: str = None) -> int:
         impact_score = 20
     return impact_score
 
-def get_unbiased_summary(cluster_headlines: list) -> str:
+def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
     """
-    Uses OpenAI's Chat API with the gpt-4o-mini model to generate an unbiased summary
-    from a cluster of headlines.
+    Generates an unbiased summary for a single news story.
+    If an article link is available, fetches the full article content (truncated if necessary)
+    and includes it in the prompt so the full story is analyzed.
     """
-    prompt = "The following are news headlines from various sources. " \
-             "Summarize the overall story in a neutral, unbiased manner, " \
-             "removing any partisan or biased language. Use concise language.\n\n"
-    for headline in cluster_headlines:
-        prompt += f"- {headline}\n"
-    prompt += "\nSummary:"
-    
+    content = headline
+    if link:
+        article_text = get_article_content(link)
+        if article_text:
+            # Limit to first 2000 characters to avoid huge prompts.
+            if len(article_text) > 2000:
+                article_text = article_text[:2000] + " ... [truncated]"
+            content += "\n\n" + article_text
+    prompt = (
+        "You are an expert news summarizer. Summarize the following full news article in a neutral and unbiased manner, "
+        "focusing on the key facts and broader implications. Use concise language.\n\n"
+        "News Article:\n" + content + "\n\nSummary:"
+    )
     try:
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
@@ -212,7 +217,7 @@ def main():
     st.write(
         "This app fetches the latest headlines from CNN, Fox News, MSNBC, and Breitbart. "
         "It performs sentiment analysis, gauges the impact of each story (using human-like judgment), "
-        "clusters overlapping stories, and generates an unbiased summary using the gpt-4o-mini model."
+        "and presents unbiased summaries of the top 10 high-impact stories."
     )
 
     # Define the news sources and their URLs.
@@ -248,9 +253,22 @@ def main():
                 "Impact": impact
             })
     df = pd.DataFrame(data)
+
+    # --- New Section: Top 10 High Impact Story Summaries ---
+    st.header("Top 10 High Impact Story Summaries")
+    # Sort stories by Impact score (descending) and select top 10.
+    top_stories = df.sort_values(by="Impact", ascending=False).head(10)
+    for idx, row in top_stories.iterrows():
+        if row["Link"]:
+            st.markdown(f"**[{row['Headline']}]({row['Link']})**  _(Source: {row['Source']})_")
+        else:
+            st.markdown(f"**{row['Headline']}**  _(Source: {row['Source']})_")
+        summary = get_unbiased_summary_for_story(row["Headline"], row["Link"])
+        st.write(summary)
+        st.markdown("---")
     
+    # --- Existing Section: Headlines with Metrics ---
     st.header("Headlines with Metrics")
-    # Display each headline with its sentiment gauge and impact gauge.
     for idx, row in df.iterrows():
         if row["Link"]:
             st.markdown(f"**[{row['Headline']}]({row['Link']})**  _(Source: {row['Source']})_")
@@ -258,7 +276,6 @@ def main():
             st.markdown(f"**{row['Headline']}**  _(Source: {row['Source']})_")
         col1, col2 = st.columns(2)
         with col1:
-            # Transform sentiment (-1 to 1) to a scale of 0 to 100.
             transformed_sentiment = (row["Sentiment"] + 1) * 50
             sentiment_fig = go.Figure(go.Indicator(
                 mode="gauge+number",
@@ -286,7 +303,7 @@ def main():
             st.write(f"Impact Score: {impact_value}/100")
         st.markdown("---")
     
-    # Cluster headlines for overlapping stories.
+    # --- Existing Section: Overlapping Stories & Unbiased Summaries ---
     st.header("Overlapping Stories & Unbiased Summaries")
     combined_headlines = []
     for headlines in all_headlines.values():
@@ -299,7 +316,7 @@ def main():
             st.write("**Headlines:**")
             for headline in cluster:
                 st.write(f"- {headline}")
-            summary = get_unbiased_summary(cluster)
+            summary = get_unbiased_summary_for_story(" ".join(cluster))
             st.write("**Unbiased Summary:**")
             st.write(summary)
             st.write("---")
