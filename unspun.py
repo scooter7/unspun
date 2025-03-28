@@ -26,11 +26,11 @@ def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
     
-    - For CNN, scrapes the main page at https://www.cnn.com and uses the <h2> elements with class 
-      "container__title_url-text container_lead-package__title_url-text". It extracts the article URL from 
-      the parent anchor, then uses a regex to find a publication date in the URL (format: /YYYY/MM/DD/). Only 
-      headlines with a publication date within the past 24 hours are kept.
-    - For Fox News, MSNBC, and Breitbart, previous methods are used.
+    - For CNN, scrapes the main page (https://www.cnn.com) and uses a union CSS selector to capture headline elements:
+      it targets both <h2 class="container__title_url-text container_lead-package__title_url-text"> and 
+      <span class="container__headline-text">. It then extracts the publication date from the article URL 
+      (looking for a /YYYY/MM/DD/ pattern) and only returns headlines from the past 24 hours.
+    - For Fox News, MSNBC, and Breitbart, existing methods are used.
     """
     headlines = []
     try:
@@ -39,8 +39,9 @@ def get_headlines(url: str, source: str) -> list:
             response = requests.get(cnn_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            # Look for the new headline elements.
-            elements = soup.select("h2.container__title_url-text.container_lead-package__title_url-text")
+            # Use a union CSS selector to capture both headline element types.
+            elements = soup.select("h2.container__title_url-text.container_lead-package__title_url-text, span.container__headline-text")
+            # Regex to capture publication date from URL (e.g., /2023/04/01/)
             date_pattern = re.compile(r'/(\d{4})/(\d{2})/(\d{2})/')
             cnn_headlines = []
             for el in elements:
@@ -51,7 +52,6 @@ def get_headlines(url: str, source: str) -> list:
                 link = parent_a.get("href")
                 if not link:
                     continue
-                # Convert relative URLs to absolute.
                 if not link.startswith("http"):
                     link = "https://www.cnn.com" + link
                 match = date_pattern.search(link)
@@ -63,7 +63,7 @@ def get_headlines(url: str, source: str) -> list:
                             cnn_headlines.append({"title": headline_text, "link": link})
                     except Exception:
                         continue
-                # If no date is found in the URL, skip this headline.
+                # Skip headlines if no publication date is found.
                 if len(cnn_headlines) >= 10:
                     break
             headlines = cnn_headlines[:10]
@@ -98,14 +98,15 @@ def get_headlines(url: str, source: str) -> list:
                     elements = soup.find_all("h2")
             else:
                 elements = soup.find_all("h2")
-            # For these sources, assume the headlines on the main page are recent.
             headlines = [{"title": el.get_text(strip=True), "link": None} for el in elements][:10]
     except Exception as e:
         st.error(f"Error fetching headlines from {source}: {e}")
     return headlines
 
 def get_article_content(url: str) -> str:
-    """Fetches the article content by extracting text from all <p> tags."""
+    """
+    Fetches the article content from the given URL by extracting text from all <p> tags.
+    """
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -181,7 +182,7 @@ def measure_impact(text: str, link: str = None) -> int:
         if numbers:
             impact_score = int(numbers[0])
         else:
-            impact_score = 20  # fallback baseline
+            impact_score = 20
     except Exception as e:
         st.error(f"Error calculating impact score: {e}")
         impact_score = 20
@@ -219,7 +220,7 @@ def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
     return summary
 
 # ----------------------------------------------------------------------
-# 2. Main App Function (Overlapping Stories section removed)
+# 2. Main App Function
 # ----------------------------------------------------------------------
 def main():
     st.title("Unbiased News Aggregator")
