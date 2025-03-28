@@ -5,3 +5,4 @@ openai
 textblob
 scikit-learn
 pandas
+lxml
