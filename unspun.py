@@ -26,31 +26,40 @@ def get_headlines(url: str, source: str) -> list:
         soup = BeautifulSoup(response.text, 'html.parser')
         
         if source == "CNN":
-            # CNN: headlines may be in <h3> with class "cd__headline"
-            elements = soup.find_all("h3", class_="cd__headline")
+            # CNN: Use the text within span tags with class 'cd__headline-text'
+            elements = soup.select("h3.cd__headline span.cd__headline-text")
             headlines = [el.get_text(strip=True) for el in elements][:10]
         
         elif source == "Fox News":
-            # Fox News: scan for anchor tags with href containing '/story/'
+            # Fox News: First try anchor tags with href containing '/story/'
             anchors = soup.find_all("a", href=True)
             filtered_headlines = []
             unwanted = [
                 "America Together", "Entertainment", "Personal Finance", 
                 "Faith & Values", "Travel + Outdoors", "Food + Drink", 
-                "FOX Weather", "Full Episodes", "Latest Wires", "Antisemitism Exposed"
+                "FOX Weather", "Full Episodes", "Latest Wires", "Antisemitism Exposed",
+                "Fox Around the World", "RSS"
             ]
             for a in anchors:
                 href = a.get("href")
                 if "/story/" in href:
                     text = a.get_text(strip=True)
-                    # Filter out headlines that exactly match unwanted phrases.
-                    if any(unw.lower() == text.lower() for unw in unwanted):
-                        continue
-                    if text and text not in filtered_headlines:
-                        filtered_headlines.append(text)
+                    if text and not any(un.lower() in text.lower() for un in unwanted):
+                        if text not in filtered_headlines:
+                            filtered_headlines.append(text)
                 if len(filtered_headlines) >= 10:
                     break
-            headlines = filtered_headlines
+            # Fallback: if not enough headlines, try h2 tags with class 'title'
+            if len(filtered_headlines) < 10:
+                h2_elements = soup.find_all("h2", class_="title")
+                for el in h2_elements:
+                    text = el.get_text(strip=True)
+                    if text and not any(un.lower() in text.lower() for un in unwanted):
+                        if text not in filtered_headlines:
+                            filtered_headlines.append(text)
+                    if len(filtered_headlines) >= 10:
+                        break
+            headlines = filtered_headlines[:10]
         
         elif source == "MSNBC":
             # MSNBC: try <h2> tags as a starting point.
