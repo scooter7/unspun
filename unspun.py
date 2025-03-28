@@ -4,8 +4,6 @@ from bs4 import BeautifulSoup
 import openai
 from textblob import TextBlob
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import DBSCAN
 import plotly.graph_objects as go
 import datetime
 import email.utils
@@ -19,6 +17,7 @@ import re
 openai.api_key = st.secrets["OPENAI"]["API_KEY"]
 
 def is_recent_date(pub_date: datetime.datetime, max_age_hours=24) -> bool:
+    """Return True if pub_date is within the past max_age_hours."""
     now = datetime.datetime.now(pub_date.tzinfo) if pub_date.tzinfo else datetime.datetime.now()
     return (now - pub_date).total_seconds() <= max_age_hours * 3600
 
@@ -26,60 +25,61 @@ def is_recent_date(pub_date: datetime.datetime, max_age_hours=24) -> bool:
 def get_headlines(url: str, source: str) -> list:
     """
     Fetches up to 10 headlines for a given source.
-    For CNN, scrapes the homepage directly and uses the article URL to parse the publication date.
-    For Fox News (via RSS), MSNBC, and Breitbart, uses existing logic.
+    
+    - For CNN, scrapes the main page at https://www.cnn.com and uses the <h2> elements with class 
+      "container__title_url-text container_lead-package__title_url-text". It extracts the article URL from 
+      the parent anchor, then uses a regex to find a publication date in the URL (format: /YYYY/MM/DD/). Only 
+      headlines with a publication date within the past 24 hours are kept.
+    - For Fox News, MSNBC, and Breitbart, previous methods are used.
     """
     headlines = []
     try:
         if source == "CNN":
-            # Directly scrape CNN homepage
             cnn_url = "https://www.cnn.com"
             response = requests.get(cnn_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            # CNN headlines are often in h3 elements with class 'cd__headline'
-            elements = soup.select("h3.cd__headline a")
-            # Use a regex to capture publication date from the URL (e.g., /2023/04/01/)
+            # Look for the new headline elements.
+            elements = soup.select("h2.container__title_url-text.container_lead-package__title_url-text")
             date_pattern = re.compile(r'/(\d{4})/(\d{2})/(\d{2})/')
-            now = datetime.datetime.now()
             cnn_headlines = []
             for el in elements:
                 headline_text = el.get_text(strip=True)
-                link = el.get("href")
+                parent_a = el.find_parent("a")
+                if not parent_a:
+                    continue
+                link = parent_a.get("href")
                 if not link:
                     continue
-                # Convert relative URL to absolute if needed.
+                # Convert relative URLs to absolute.
                 if not link.startswith("http"):
                     link = "https://www.cnn.com" + link
                 match = date_pattern.search(link)
                 if match:
                     year, month, day = match.groups()
                     try:
-                        # CNN URLs don't provide time; assume publication is at midnight local time.
                         pub_date = datetime.datetime(int(year), int(month), int(day))
                         if is_recent_date(pub_date, max_age_hours=24):
                             cnn_headlines.append({"title": headline_text, "link": link})
                     except Exception:
                         continue
-                # If no date is found, we skip the headline.
+                # If no date is found in the URL, skip this headline.
                 if len(cnn_headlines) >= 10:
                     break
             headlines = cnn_headlines[:10]
         elif source == "Fox News":
-            # Use Fox News's RSS feed
             rss_url = "https://feeds.foxnews.com/foxnews/latest"
             response = requests.get(rss_url, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "lxml-xml")
             items = soup.find_all("item")
-            # Filter by publication date using the pubDate field.
             recent_items = []
             now = datetime.datetime.now(datetime.timezone.utc)
             for item in items:
                 if item.pubDate:
                     try:
                         pub_date = email.utils.parsedate_to_datetime(item.pubDate.get_text())
-                        if (now - pub_date).total_seconds() <= 24*3600:
+                        if (now - pub_date).total_seconds() <= 24 * 3600:
                             recent_items.append(item)
                     except Exception:
                         recent_items.append(item)
@@ -98,16 +98,14 @@ def get_headlines(url: str, source: str) -> list:
                     elements = soup.find_all("h2")
             else:
                 elements = soup.find_all("h2")
-            # For these sources, we assume the headlines on the main page are recent.
+            # For these sources, assume the headlines on the main page are recent.
             headlines = [{"title": el.get_text(strip=True), "link": None} for el in elements][:10]
     except Exception as e:
         st.error(f"Error fetching headlines from {source}: {e}")
     return headlines
 
 def get_article_content(url: str) -> str:
-    """
-    Fetches the article content from the given URL by extracting all <p> tags.
-    """
+    """Fetches the article content by extracting text from all <p> tags."""
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -220,27 +218,8 @@ def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
         summary = "Error generating summary: " + str(e)
     return summary
 
-def cluster_headlines(headlines: list) -> list:
-    """
-    Clusters headlines using TF-IDF vectorization and DBSCAN.
-    Returns a list of clusters (each cluster is a list of headline texts).
-    Headlines not grouped (noise) are omitted.
-    """
-    if not headlines:
-        return []
-    texts = [h["title"] for h in headlines]
-    vectorizer = TfidfVectorizer(stop_words="english")
-    X = vectorizer.fit_transform(texts)
-    clustering = DBSCAN(eps=0.5, min_samples=2, metric="cosine").fit(X)
-    clusters = {}
-    for idx, label in enumerate(clustering.labels_):
-        if label == -1:
-            continue
-        clusters.setdefault(label, []).append(texts[idx])
-    return list(clusters.values())
-
 # ----------------------------------------------------------------------
-# 2. Main App Function
+# 2. Main App Function (Overlapping Stories section removed)
 # ----------------------------------------------------------------------
 def main():
     st.title("Unbiased News Aggregator")
@@ -252,7 +231,7 @@ def main():
 
     # Define the news sources and their URLs.
     news_sources = {
-        "CNN": "https://www.cnn.com",
+        "CNN": "https://www.cnn.com",  # We'll scrape the main page for CNN
         "Fox News": "https://www.foxnews.com",
         "MSNBC": "https://www.msnbc.com",
         "Breitbart": "https://www.breitbart.com"
@@ -286,7 +265,6 @@ def main():
 
     # --- Top 10 High Impact Story Summaries Section ---
     st.header("Top 10 High Impact Story Summaries")
-    # Sort stories by Impact score (descending) and select the top 10.
     top_stories = df.sort_values(by="Impact", ascending=False).head(10)
     for idx, row in top_stories.iterrows():
         if row["Link"]:
@@ -332,26 +310,6 @@ def main():
             st.progress(impact_value / 100)
             st.write(f"Impact Score: {impact_value}/100")
         st.markdown("---")
-    
-    # --- Overlapping Stories & Unbiased Summaries Section ---
-    st.header("Overlapping Stories & Unbiased Summaries")
-    combined_headlines = []
-    for headlines in all_headlines.values():
-        for item in headlines:
-            combined_headlines.append(item["title"])
-    clusters = cluster_headlines([{"title": h} for h in combined_headlines])
-    if clusters:
-        for i, cluster in enumerate(clusters):
-            st.markdown(f"### Overlapping Story Cluster {i+1}")
-            st.write("**Headlines:**")
-            for headline in cluster:
-                st.write(f"- {headline}")
-            summary = get_unbiased_summary_for_story(" ".join(cluster))
-            st.write("**Unbiased Summary:**")
-            st.write(summary)
-            st.write("---")
-    else:
-        st.write("No overlapping stories were detected.")
 
 if __name__ == "__main__":
     main()
