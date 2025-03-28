@@ -211,11 +211,10 @@ def get_unbiased_summary_for_story(headline: str, link: str = None) -> str:
 # 2. Main App Function
 # ----------------------------------------------------------------------
 def main():
-    st.title("Unbiased News Aggregator")
+    st.title("UnSpun")
     st.write(
         "This app fetches the latest headlines from CNN, Fox News, MSNBC, and Breitbart. "
-        "It performs sentiment analysis, gauges the impact of each story (using human-like judgment), "
-        "and presents unbiased summaries of the top 10 high-impact stories."
+        "It provides unbiased summaries of high-impact stories and gauges the sentiment of how the stories were depicted by their original sources."
     )
 
     # Define the news sources and their URLs.
